@@ -1,0 +1,88 @@
+{
+  "entregas": [
+    {
+      "id": 101,
+      "cliente": "Padaria Pão Quente",
+      "endereco": "Rua das Flores, 123",
+      "pedido": "Nº 5589",
+      "status": "Pendente",
+      "entregadorId": 1
+    },
+    {
+      "id": 103,
+      "cliente": "Farmácia Saúde Já",
+      "endereco": "Praça da Matriz, 45",
+      "pedido": "Nº 5591",
+      "status": "Em Trânsito",
+      "entregadorId": 1
+    },
+    {
+      "id": 1754309042246,
+      "cliente": "aa",
+      "endereco": "2232",
+      "pedido": "aa",
+      "status": "Em Trânsito",
+      "entregadorId": 2
+    },
+    {
+      "id": 1754309128832,
+      "cliente": "dsds",
+      "endereco": "dsdsd",
+      "pedido": "dsd",
+      "status": "Em Trânsito",
+      "entregadorId": 2
+    },
+    {
+      "id": 1754309476041,
+      "cliente": "ds2",
+      "endereco": "324",
+      "pedido": "aaa",
+      "status": "Em Trânsito",
+      "entregadorId": 2
+    },
+    {
+      "id": 1754310205952,
+      "cliente": "ddd",
+      "endereco": "ddd",
+      "pedido": "ddd",
+      "status": "Em Trânsito",
+      "entregadorId": 2
+    },
+    {
+      "id": 1754310506455,
+      "cliente": "sss",
+      "endereco": "ssss",
+      "pedido": "ssss",
+      "status": "Em Trânsito",
+      "entregadorId": 2
+    },
+    {
+      "id": 1754310822374,
+      "cliente": "aa",
+      "endereco": "aaa",
+      "pedido": "por favor",
+      "status": "Em Trânsito",
+      "entregadorId": 1
+    },
+    {
+      "id": 1754311036738,
+      "cliente": "zz",
+      "endereco": "zzz",
+      "pedido": "zz",
+      "status": "Em Trânsito",
+      "entregadorId": 1
+    }
+  ],
+  "entregadores": [
+    {
+      "id": 1,
+      "nome": "João Silva (Teste)",
+      "whatsapp": "+554284252941"
+    },
+    {
+      "id": 2,
+      "nome": "Maria Oliveira (Teste)",
+      "whatsapp": "+554284252941"
+    }
+  ]
+}
