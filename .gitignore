@@ -1,13 +1,8 @@
-# Arquivo de variáveis de ambiente
 .env
-
-# Pasta de dependências
 node_modules/
-
 ngrok.exe
-
-# Logs do NPM
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
+serviceAccountKey.json
