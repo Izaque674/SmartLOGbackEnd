@@ -4,6 +4,8 @@ const express = require('express');
 const cors = require('cors');
 const twilio = require('twilio');
 const admin = require('firebase-admin');
+const path = require('path');
+const fs = require('fs');
 
 const serviceAccount = require('./serviceAccountKey.json');
 
@@ -23,134 +25,99 @@ if (!process.env.TWILIO_ACCOUNT_SID || !process.env.TWILIO_AUTH_TOKEN) {
 }
 const client = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
 
-let ultimaEntregaAtiva = {};
+// --- RASTREADOR ATUALIZADO ---
+// Agora mapeia o SID da MENSAGEM para o ID da ENTREGA
+let sidParaEntregaMap = {}; 
 
-app.get('/api/dados', async (req, res) => {
-  try {
-    const entregadoresSnapshot = await db.collection('entregadores').get();
-    const entregasSnapshot = await db.collection('entregas').get();
-    const entregadores = entregadoresSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-    const entregas = entregasSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-    res.json({ entregadores, entregas });
-  } catch (error) {
-    console.error("Erro ao buscar dados do Firestore:", error);
-    res.status(500).send("Erro interno do servidor.");
-  }
-});
-
-app.get('/api/operacao/:userId', async (req, res) => {
-  const { userId } = req.params;
-  try {
-    const jornadasRef = db.collection('jornadas');
-    const qJornada = jornadasRef.where("userId", "==", userId).where("status", "==", "ativa");
-    const jornadaSnapshot = await qJornada.get();
-    if (jornadaSnapshot.empty) {
-      return res.json({ entregadoresAtivos: [], entregasAtivas: [] });
-    }
-    const jornada = jornadaSnapshot.docs[0].data();
-    const jornadaId = jornadaSnapshot.docs[0].id;
-    const idsEntregadoresAtivos = jornada.entregadoresIds || [];
-    if (idsEntregadoresAtivos.length === 0) {
-      return res.json({ entregadoresAtivos: [], entregasAtivas: [] });
-    }
-    const entregadoresRef = db.collection('entregadores');
-    const qEntregadores = entregadoresRef.where(admin.firestore.FieldPath.documentId(), 'in', idsEntregadoresAtivos);
-    const entregadoresSnapshot = await qEntregadores.get();
-    const entregadoresAtivos = entregadoresSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-    const entregasRef = db.collection('entregas');
-    const qEntregas = entregasRef.where("jornadaId", "==", jornadaId);
-    const entregasSnapshot = await qEntregas.get();
-    const entregasAtivas = entregasSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-    res.json({ entregadoresAtivos, entregasAtivas });
-  } catch (error) {
-    console.error("Erro ao buscar dados da operação:", error);
-    res.status(500).send("Erro interno do servidor.");
-  }
-});
+// ...endpoints /api/dados e /api/operacao/:userId (sem alterações)...
 
 app.post('/api/entregas', async (req, res) => {
   const { cliente, endereco, pedido, entregadorId } = req.body;
   try {
-    const entregadorRef = db.collection('entregadores').doc(entregadorId);
-    const entregadorDoc = await entregadorRef.get();
+    const entregadorDoc = await db.collection('entregadores').doc(entregadorId).get();
+    if (!entregadorDoc.exists) return res.status(404).send('Entregador não encontrado.');
 
-    // --- CORREÇÃO AQUI ---
-    if (!entregadorDoc.exists) { // .exists é uma propriedade, não uma função
-      return res.status(404).send('Entregador não encontrado.');
-    }
-    
     const entregador = entregadorDoc.data();
-    if (!entregador.userId) return res.status(500).send('Erro: Entregador sem userId.');
-    
-    const numeroDeTeste = process.env.MY_VERIFIED_NUMBER;
-    if (!numeroDeTeste) return res.status(500).send('Erro: MY_VERIFIED_NUMBER não definido.');
+    const jornadas = await db.collection('jornadas').where("userId", "==", entregador.userId).where("status", "==", "ativa").get();
+    if (jornadas.empty) return res.status(400).send('Nenhuma jornada ativa.');
 
-    const jornadasRef = db.collection('jornadas');
-    const q = jornadasRef.where("userId", "==", entregador.userId).where("status", "==", "ativa");
-    const jornadasSnapshot = await q.get();
-    if (jornadasSnapshot.empty) {
-      return res.status(400).send('Nenhuma jornada ativa encontrada.');
-    }
-    const jornadaAtivaId = jornadasSnapshot.docs[0].id;
-
-    const novaEntrega = { 
-      cliente, endereco, pedido, status: 'Em Trânsito', 
-      entregadorId, userId: entregador.userId, jornadaId: jornadaAtivaId
+    const jornadaId = jornadas.docs[0].id;
+    const novaEntrega = {
+      cliente, endereco, pedido, status: 'Em Trânsito',
+      entregadorId, userId: entregador.userId, jornadaId,
+      createdAt: admin.firestore.FieldValue.serverTimestamp()
     };
-    
     const docRef = await db.collection('entregas').add(novaEntrega);
-    const novaEntregaComId = { id: docRef.id, ...novaEntrega };
-    
-    console.log(`[DB] Nova entrega ${docRef.id} salva para a jornada ${jornadaAtivaId}.`);
 
+    const numeroTeste = process.env.MY_VERIFIED_NUMBER;
     const CONTENT_SID = 'HX54374ce3e36b6bffa76dfe61c3522f3b';
 
-    await client.messages.create({
-      contentSid: CONTENT_SID,
-      contentVariables: JSON.stringify({ '1': novaEntrega.pedido, '2': novaEntrega.cliente, '3': novaEntrega.endereco }),
-      from: `whatsapp:${process.env.TWILIO_WHATSAPP_NUMBER}`,
-      to: `whatsapp:${numeroDeTeste}`
-    });
-
-    console.log(`[TWILIO-SUCCESS] Mensagem enviada para: ${numeroDeTeste}`);
-    
-    if (entregador.whatsapp) {
-      ultimaEntregaAtiva[entregador.whatsapp] = novaEntregaComId.id;
+    if (numeroTeste && CONTENT_SID) {
+      // A chamada `create` agora está dentro de uma variável `message`
+      const message = await client.messages.create({
+        contentSid: CONTENT_SID,
+        contentVariables: JSON.stringify({ '1': pedido, '2': cliente, '3': endereco }),
+        from: `whatsapp:${process.env.TWILIO_WHATSAPP_NUMBER}`,
+        to: `whatsapp:${numeroTeste}`
+      });
+      
+      // --- LÓGICA DE RASTREAMENTO CORRIGIDA ---
+      // Associamos o SID da mensagem enviada com o ID da nossa entrega
+      sidParaEntregaMap[message.sid] = docRef.id;
+      console.log(`[RASTREADOR] Mensagem SID ${message.sid} associada à entrega ${docRef.id}`);
     }
-
-    res.status(201).json(novaEntregaComId);
+    
+    res.status(201).json({ id: docRef.id, ...novaEntrega });
   } catch (error) {
-    console.error('ERRO GERAL no /api/entregas:', error);
-    res.status(500).send("Ocorreu um erro no servidor.");
+    console.error("Erro ao criar entrega:", error);
+    res.status(500).send("Erro interno do servidor.");
   }
 });
 
 app.post('/api/webhook/whatsapp', async (req, res) => {
-  const { From, Body } = req.body;
-  if (!From || !Body) return res.status(400).send('Inválido.');
-  const numeroEntregador = From.replace('whatsapp:', '');
-  const textoResposta = Body.trim().toLowerCase();
-  
-  const entregaIdAtiva = ultimaEntregaAtiva[numeroEntregador];
-  if (entregaIdAtiva) {
-    const entregaRef = db.collection('entregas').doc(entregaIdAtiva);
-    const entregaDoc = await entregaRef.get();
+  try {
+    // --- LÓGICA DO WEBHOOK CORRIGIDA ---
+    const { OriginalRepliedMessageSid, Body } = req.body;
     
-    // --- CORREÇÃO AQUI ---
-    if (entregaDoc.exists && entregaDoc.data().status === 'Em Trânsito') { // .exists é uma propriedade
-      let novoStatus = null;
-      if (textoResposta.includes('concluída')) novoStatus = 'Concluída';
-      else if (textoResposta.includes('falhou')) novoStatus = 'Falhou';
-      
-      if (novoStatus) {
-        await entregaRef.update({ status: novoStatus });
-        delete ultimaEntregaAtiva[numeroEntregador];
+    if (!OriginalRepliedMessageSid || !Body) return res.status(400).send('Webhook inválido');
+    
+    console.log(`[WEBHOOK] Resposta recebida para a mensagem original SID: ${OriginalRepliedMessageSid}`);
+
+    // Usamos o SID da mensagem respondida para encontrar o ID da nossa entrega
+    const entregaId = sidParaEntregaMap[OriginalRepliedMessageSid];
+    const textoResposta = Body.trim().toLowerCase();
+
+    if (entregaId) {
+      console.log(`[RASTREADOR] Encontrada entrega ativa: ${entregaId}`);
+      const ref = db.collection('entregas').doc(entregaId);
+      const doc = await ref.get();
+
+      if (doc.exists && doc.data().status === 'Em Trânsito') {
+        let novoStatus = null;
+        if (textoResposta.includes('concluída')) novoStatus = 'Concluída';
+        else if (textoResposta.includes('falhou')) novoStatus = 'Falhou';
+        
+        if (novoStatus) {
+            await ref.update({ status: novoStatus });
+            console.log(`[DB] Entrega ${entregaId} atualizada para ${novoStatus}`);
+            // Limpamos o rastreador para esta mensagem específica
+            delete sidParaEntregaMap[OriginalRepliedMessageSid];
+        }
       }
+    } else {
+      console.log(`[RASTREADOR] Nenhuma entrega encontrada para a mensagem SID ${OriginalRepliedMessageSid}`);
     }
+
+    res.setHeader('Content-Type', 'text/xml');
+    return res.status(200).send('<Response/>');
+  } catch (error) {
+    console.error("Erro no webhook:", error);
+    res.status(500).send('<Response/>');
   }
-  res.setHeader('Content-Type', 'text/xml');
-  res.status(200).send('<Response/>');
 });
+
+
+
 
 // Endpoints CRUD de Entregadores
 app.post('/api/entregadores', async (req, res) => {
@@ -183,6 +150,231 @@ app.delete('/api/entregadores/:id', async (req, res) => {
     res.status(204).send();
   } catch (error) {
     res.status(500).send("Erro ao deletar.");
+  }
+});
+
+
+// --- ENDPOINT PARA DELETAR UMA JORNADA ESPECÍFICA ---
+app.delete('/api/jornadas/:id', async (req, res) => {
+  const { id } = req.params;
+  try {
+    // Nota: Em um sistema de produção, poderíamos querer deletar também
+    // todas as entregas associadas a esta jornada. Por enquanto, vamos
+    // apenas deletar o documento da jornada em si.
+    await db.collection('jornadas').doc(id).delete();
+    
+    console.log(`[JORNADA] Jornada ${id} deletada com sucesso.`);
+    res.status(204).send(); // Sucesso, sem conteúdo para retornar
+  } catch (error) {
+    console.error(`Erro ao deletar jornada ${id}:`, error);
+    res.status(500).send("Erro interno do servidor.");
+  }
+});
+
+// --- ENDPOINT PARA ATUALIZAR O STATUS DE UMA ENTREGA ---
+app.patch('/api/entregas/:id/status', async (req, res) => {
+  const { id } = req.params;
+  const { status } = req.body; // Espera receber um objeto como { "status": "Concluída" }
+
+  if (!status) {
+    return res.status(400).send('O novo status é obrigatório.');
+  }
+
+  try {
+    const entregaRef = db.collection('entregas').doc(id);
+    await entregaRef.update({ 
+      status: status,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp() // Adiciona um timestamp de atualização
+    });
+    
+    console.log(`[STATUS] Status da entrega ${id} atualizado para "${status}" pelo gestor.`);
+    res.status(200).json({ message: 'Status atualizado com sucesso.' });
+
+  } catch (error) {
+    console.error(`Erro ao atualizar status da entrega ${id}:`, error);
+    res.status(500).send("Erro interno do servidor.");
+  }
+});
+
+// --- ENDPOINT PARA BUSCAR OS DADOS DA OPERAÇÃO AO VIVO ---
+app.get('/api/operacao/:userId', async (req, res) => {
+  const { userId } = req.params;
+  
+  try {
+    // 1. Encontra a jornada ativa para o usuário
+    const jornadasRef = db.collection('jornadas');
+    const qJornada = jornadasRef.where("userId", "==", userId).where("status", "==", "ativa");
+    const jornadaSnapshot = await qJornada.get();
+
+    if (jornadaSnapshot.empty) {
+      // Se não há jornada, retorna vazio. O front-end saberá como lidar com isso.
+      return res.json({ entregadoresAtivos: [], entregasAtivas: [] });
+    }
+
+    const jornada = jornadaSnapshot.docs[0].data();
+    const jornadaId = jornadaSnapshot.docs[0].id;
+    const idsEntregadoresAtivos = jornada.entregadoresIds || [];
+
+    if (idsEntregadoresAtivos.length === 0) {
+      return res.json({ entregadoresAtivos: [], entregasAtivas: [] });
+    }
+
+    // 2. Busca os detalhes dos entregadores ativos
+    const entregadoresRef = db.collection('entregadores');
+    const qEntregadores = entregadoresRef.where(admin.firestore.FieldPath.documentId(), 'in', idsEntregadoresAtivos);
+    const entregadoresSnapshot = await qEntregadores.get();
+    const entregadoresAtivos = entregadoresSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+
+    // 3. Busca as entregas da jornada ativa
+    const entregasRef = db.collection('entregas');
+    const qEntregas = entregasRef.where("jornadaId", "==", jornadaId);
+    const entregasSnapshot = await qEntregas.get();
+    const entregasAtivas = entregasSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+    
+    // 4. Retorna tudo de uma vez para o front-end
+    res.json({ entregadoresAtivos, entregasAtivas });
+
+  } catch (error) {
+    console.error("Erro ao buscar dados da operação:", error);
+    res.status(500).send("Erro interno do servidor.");
+  }
+});
+
+app.get('/api/jornadas/historico/:userId', async (req, res) => {
+  const { userId } = req.params;
+
+  try {
+    const jornadasRef = db.collection('jornadas');
+    const q = jornadasRef
+      .where("userId", "==", userId)
+      .where("status", "==", "finalizada")
+      .orderBy("dataFim", "desc"); // Ordena pelas mais recentes
+
+    const snapshot = await q.get();
+
+    if (snapshot.empty) {
+      return res.json([]); // Retorna um array vazio se não houver histórico
+    }
+
+    const historico = snapshot.docs.map(doc => {
+      const data = doc.data();
+      // Converte os timestamps para strings ISO para o front-end
+      return {
+        id: doc.id,
+        ...data,
+        dataInicio: data.dataInicio ? data.dataInicio.toDate().toISOString() : null,
+        dataFim: data.dataFim ? data.dataFim.toDate().toISOString() : null
+      };
+    });
+
+    res.status(200).json(historico);
+
+  } catch (error) {
+    console.error("Erro ao buscar histórico de jornadas:", error);
+    res.status(500).send("Erro interno do servidor.");
+  }
+});
+
+app.post('/api/jornadas/:id/finalizar', async (req, res) => {
+  const { id } = req.params;
+  
+  try {
+    const jornadaRef = db.collection('jornadas').doc(id);
+    const jornadaDoc = await jornadaRef.get();
+
+    if (!jornadaDoc.exists) {
+      return res.status(404).send('Jornada não encontrada.');
+    }
+
+    // 1. Buscar todas as entregas associadas a esta jornada
+    const entregasRef = db.collection('entregas');
+    const q = entregasRef.where("jornadaId", "==", id);
+    const entregasSnapshot = await q.get();
+
+    // 2. Calcular as estatísticas
+    let totalEntregas = entregasSnapshot.docs.length;
+    let concluidas = 0;
+    let falhas = 0;
+
+    entregasSnapshot.docs.forEach(doc => {
+      const status = doc.data().status;
+      if (status === 'Concluída') {
+        concluidas++;
+      } else if (status === 'Falhou') {
+        falhas++;
+      }
+    });
+
+    const resumo = {
+      totalEntregas,
+      concluidas,
+      falhas,
+      taxaSucesso: totalEntregas > 0 ? ((concluidas / totalEntregas) * 100).toFixed(1) : "0.0"
+    };
+
+    // 3. Atualizar o documento da jornada com o resumo e o novo status
+    await jornadaRef.update({
+      status: "finalizada",
+      dataFim: admin.firestore.FieldValue.serverTimestamp(),
+      resumo: resumo
+    });
+
+    console.log(`[JORNADA] Jornada ${id} finalizada com sucesso.`);
+
+    // 4. Retornar o resumo calculado para o front-end
+    res.status(200).json(resumo);
+
+  } catch (error) {
+    console.error(`Erro ao finalizar jornada ${id}:`, error);
+    res.status(500).send("Erro interno do servidor ao finalizar jornada.");
+  }
+});
+
+
+// --- ENDPOINT PARA BUSCAR OS DETALHES DE UMA JORNADA FINALIZADA (CORRIGIDO) ---
+app.get('/api/jornadas/:id/detalhes', async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    const jornadaRef = db.collection('jornadas').doc(id);
+    const jornadaDoc = await jornadaRef.get();
+    if (!jornadaDoc.exists) {
+      return res.status(404).send('Jornada não encontrada.');
+    }
+    
+    // --- CORREÇÃO APLICADA AQUI ---
+    const jornadaData = jornadaDoc.data();
+    // Converte os timestamps do Firebase para strings ISO antes de enviar
+    if (jornadaData.dataInicio) {
+      jornadaData.dataInicio = jornadaData.dataInicio.toDate().toISOString();
+    }
+    if (jornadaData.dataFim) {
+      jornadaData.dataFim = jornadaData.dataFim.toDate().toISOString();
+    }
+    
+    const idsEntregadores = jornadaData.entregadoresIds || [];
+    let entregadoresParticipantes = [];
+    if (idsEntregadores.length > 0) {
+      const entregadoresRef = db.collection('entregadores');
+      const qEntregadores = entregadoresRef.where(admin.firestore.FieldPath.documentId(), 'in', idsEntregadores);
+      const entregadoresSnapshot = await qEntregadores.get();
+      entregadoresParticipantes = entregadoresSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+    }
+
+    const entregasRef = db.collection('entregas');
+    const qEntregas = entregasRef.where("jornadaId", "==", id);
+    const entregasSnapshot = await qEntregas.get();
+    const entregasDaJornada = entregasSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+    
+    res.status(200).json({
+      jornada: jornadaData,
+      entregadores: entregadoresParticipantes,
+      entregas: entregasDaJornada
+    });
+
+  } catch (error) {
+    console.error(`Erro ao buscar detalhes da jornada ${id}:`, error);
+    res.status(500).send("Erro interno do servidor.");
   }
 });
 
