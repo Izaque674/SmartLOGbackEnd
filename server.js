@@ -122,12 +122,26 @@ app.post('/api/webhook/whatsapp', async (req, res) => {
 // Endpoints CRUD de Entregadores
 app.post('/api/entregadores', async (req, res) => {
   const { nome, telefone, veiculo, rota, userId } = req.body;
-  if (!nome || !userId) return res.status(400).send('Dados incompletos.');
+  
+  console.log('[API] Recebida requisição para criar entregador:', req.body);
+
+  if (!nome || !userId) {
+    console.error('[API-ERRO] Dados incompletos: nome e userId são obrigatórios.');
+    return res.status(400).send('Dados incompletos: Nome e userId são obrigatórios.');
+  }
+
   try {
-    const docRef = await db.collection('entregadores').add({ nome, telefone, veiculo, rota, userId });
-    res.status(201).json({ id: docRef.id, ...req.body });
+    const dadosParaSalvar = { nome, telefone, veiculo, rota, userId };
+    const docRef = await db.collection('entregadores').add(dadosParaSalvar);
+    
+    console.log(`[DB-SUCCESS] Entregador criado com sucesso. ID: ${docRef.id}`);
+    
+    // Retorna o novo objeto completo, incluindo o ID gerado
+    res.status(201).json({ id: docRef.id, ...dadosParaSalvar });
+
   } catch (error) {
-    res.status(500).send("Erro ao criar.");
+    console.error('ERRO GERAL ao criar entregador:', error);
+    res.status(500).send('Erro interno do servidor ao criar entregador.');
   }
 });
 
@@ -167,6 +181,50 @@ app.delete('/api/jornadas/:id', async (req, res) => {
     res.status(204).send(); // Sucesso, sem conteúdo para retornar
   } catch (error) {
     console.error(`Erro ao deletar jornada ${id}:`, error);
+    res.status(500).send("Erro interno do servidor.");
+  }
+});
+
+// --- ENDPOINT PARA BUSCAR OS DADOS DOS KPIs (VERSÃO FINAL E ROBUSTA) ---
+app.get('/api/kpis/:userId', async (req, res) => {
+  const { userId } = req.params;
+
+  try {
+    const hoje = new Date();
+    hoje.setHours(0, 0, 0, 0);
+
+    const ontem = new Date(hoje);
+    ontem.setDate(hoje.getDate() - 1);
+
+    // 1. A query agora é a mais simples possível: busca TODAS as jornadas do usuário.
+    // Esta query SÓ filtra por 'userId' e não precisa de nenhum índice composto.
+    const jornadasRef = db.collection('jornadas');
+    const q = jornadasRef.where("userId", "==", userId);
+    
+    const snapshot = await q.get();
+
+    let entregasConcluidasOntem = 0;
+    if (!snapshot.empty) {
+      // 2. O filtro por 'status' E por 'data' é feito aqui, no código.
+      snapshot.docs.forEach(doc => {
+        const jornada = doc.data();
+        // Verifica se a jornada está finalizada E se a data de fim foi ontem
+        if (jornada.status === 'finalizada' && jornada.dataFim && jornada.dataFim.toDate() >= ontem && jornada.dataFim.toDate() < hoje) {
+          if (jornada.resumo && jornada.resumo.concluidas) {
+            entregasConcluidasOntem += jornada.resumo.concluidas;
+          }
+        }
+      });
+    }
+
+    const kpis = {
+      entregasConcluidasOntem: entregasConcluidasOntem,
+    };
+
+    res.status(200).json(kpis);
+
+  } catch (error) {
+    console.error("Erro ao buscar KPIs:", error);
     res.status(500).send("Erro interno do servidor.");
   }
 });
