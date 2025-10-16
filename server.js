@@ -1,4 +1,4 @@
-// --- INÍCIO DO ARQUIVO server.js ---
+
 
 require('dotenv').config();
 
@@ -7,9 +7,9 @@ const cors = require('cors');
 const admin = require('firebase-admin');
 const path = require('path');
 const fs = require('fs');
-const fetch = require('node-fetch'); // Usaremos para a API do Telegram
+const fetch = require('node-fetch'); 
 
-// Inicialização do Firebase (sem alterações)
+
 const serviceAccountPath = path.join(__dirname, 'serviceAccountKey.json');
 if (!fs.existsSync(serviceAccountPath)) {
   console.error('ERRO FATAL: serviceAccountKey.json não encontrado.');
@@ -31,9 +31,9 @@ app.use(express.urlencoded({ extended: true }));
 
 // --- ROTA PRINCIPAL PARA CRIAR ENTREGAS E ENVIAR MENSAGEM ---
 app.post('/api/entregas', async (req, res) => {
-  const { cliente, endereco, pedido, entregadorId } = req.body;
+ 
+  const { cliente, endereco, pedido, entregadorId, tipo, valorCobrar } = req.body;
   try {
-    // Lógica do Firebase para criar a entrega (sem alterações)
     const entregadorDoc = await db.collection('entregadores').doc(entregadorId).get();
     if (!entregadorDoc.exists) return res.status(404).send('Entregador não encontrado.');
 
@@ -43,116 +43,175 @@ app.post('/api/entregas', async (req, res) => {
 
     const jornadaId = jornadas.docs[0].id;
     const novaEntrega = {
-      cliente, endereco, pedido, status: 'Em Trânsito',
-      entregadorId, userId: entregador.userId, jornadaId,
+      cliente, 
+      endereco, 
+      pedido, 
+      status: 'Em Trânsito',
+      entregadorId, 
+      userId: entregador.userId, 
+      jornadaId,
+      tipo: tipo || 'Entrega', 
+      valorCobrar: valorCobrar || 0, 
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
     };
     const docRef = await db.collection('entregas').add(novaEntrega);
 
-    await db.collection('jornadas').doc(jornadaId).collection('eventos').add({
-      tipo: 'CRIACAO',
-      texto: `Entrega "${pedido || 'N/A'}" para "${cliente}" atribuída a ${entregador.nome}.`,
-      timestamp: admin.firestore.FieldValue.serverTimestamp(),
-      entregaId: docRef.id
-    });
-
-    // --- SEÇÃO TELEGRAM BOT API ---
     const { TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID } = process.env;
 
     if (TELEGRAM_BOT_TOKEN && TELEGRAM_CHAT_ID) {
         const telegramUrl = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`;
-        const text = `*Nova entrega para ${cliente}!*\n\n*Pedido:* ${pedido}\n*Endereço:* ${endereco}`;
+    
+        let text = `*Nova ${novaEntrega.tipo} para ${cliente}!*\n\n*Pedido:* ${pedido}\n*Endereço:* ${endereco}`;
+        if (novaEntrega.valorCobrar > 0) {
+            text += `\n\n*Atenção:* Cobrar R$ ${novaEntrega.valorCobrar.toFixed(2).replace('.', ',')}`;
+        }
 
         try {
-            console.log(`[TELEGRAM] Preparando envio para o Chat ID: ${TELEGRAM_CHAT_ID}`);
-
             const response = await fetch(telegramUrl, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                    chat_id: TELEGRAM_CHAT_ID,
+                    chat_id: TELEGRAM_CHAT_ID, // Mude aqui para o telefone do entregador no futuro
                     text: text,
-                    parse_mode: 'Markdown', // Permite usar *bold* e _italic_
+                    parse_mode: 'Markdown',
                     reply_markup: {
                         inline_keyboard: [
-                            [ // Primeira linha de botões
-                                { text: "✅ Entrega Concluída", callback_data: `update_${docRef.id}_concluida` },
-                                { text: "❌ Falha na Entrega", callback_data: `update_${docRef.id}_falhou` }
+                            [ // Linha 1 de botões
+                                { text: "✅ Concluída", callback_data: `update_${docRef.id}_concluida` },
+                                { text: "❌ Falhou", callback_data: `update_${docRef.id}_falhou` }
+                            ],
+                            [ // Linha 2 de botões
+                                { text: "📝 Adicionar Observação", callback_data: `obs_${docRef.id}` }
                             ]
                         ]
                     }
                 })
             });
-            const data = await response.json();
-            if (response.ok) {
-                console.log("[TELEGRAM] Mensagem enviada com sucesso!", data);
-            } else {
-                console.error("[TELEGRAM] Falha ao enviar mensagem:", data);
-            }
-        } catch (error) {
-            console.error("[TELEGRAM] Erro crítico:", error.message);
-        }
-    } else {
-        console.warn("[TELEGRAM] Envio não realizado. Verifique as variáveis de ambiente.");
+            // ... resto do tratamento da resposta
+        } catch (error) { /* ... */ }
     }
     
     res.status(201).json({ id: docRef.id, ...novaEntrega });
   } catch (error) {
-    console.error("Erro ao criar entrega:", error.message);
+    console.error("Erro ao criar entrega:", error);
     res.status(500).send("Erro interno do servidor.");
   }
 });
 
-
 // --- WEBHOOK PARA RECEBER RESPOSTAS DOS BOTÕES DO TELEGRAM ---
+async function enviarMensagemTelegram(chatId, text) {
+  const { TELEGRAM_BOT_TOKEN } = process.env;
+  if (!TELEGRAM_BOT_TOKEN) return;
+  
+  const telegramUrl = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`;
+  try {
+    await fetch(telegramUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chat_id: chatId, text: text, parse_mode: 'Markdown' })
+    });
+  } catch (error) {
+    console.error("[TELEGRAM] Erro ao enviar mensagem auxiliar:", error);
+  }
+}
+
+
+// Em server.js
+
+// --- FUNÇÕES AUXILIARES ---
+
+// Função para enviar NOVAS mensagens
+async function enviarMensagemTelegram(chatId, text, replyMarkup = null) {
+  const { TELEGRAM_BOT_TOKEN } = process.env;
+  if (!TELEGRAM_BOT_TOKEN) return;
+  
+  const telegramUrl = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`;
+  try {
+    await fetch(telegramUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ 
+        chat_id: chatId, 
+        text: text, 
+        parse_mode: 'Markdown',
+        reply_markup: replyMarkup 
+      })
+    });
+  } catch (error) {
+    console.error("[TELEGRAM] Erro ao enviar mensagem:", error);
+  }
+}
+
+// Função para EDITAR mensagens existentes
+async function editarMensagemTelegram(chatId, messageId, text) {
+    const { TELEGRAM_BOT_TOKEN } = process.env;
+    if (!TELEGRAM_BOT_TOKEN) return;
+
+    const telegramUrl = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/editMessageText`;
+    try {
+        await fetch(telegramUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                chat_id: chatId,
+                message_id: messageId,
+                text: text,
+                parse_mode: 'Markdown'
+                // Não enviamos 'reply_markup' para que os botões desapareçam
+            })
+        });
+        console.log(`[TELEGRAM] Mensagem ${messageId} editada com sucesso.`);
+    } catch (error) {
+        console.error("[TELEGRAM] Erro ao editar mensagem:", error);
+    }
+}
+
+
+// --- ROTA PRINCIPAL DO WEBHOOK ---
 app.post('/api/webhook/telegram', async (req, res) => {
     try {
-        console.log('[WEBHOOK TELEGRAM] Nova notificação recebida:', req.body);
-
         if (req.body.callback_query) {
             const callbackQuery = req.body.callback_query;
-            const callbackData = callbackQuery.data; // Ex: "update_abc123_concluida"
-            
-            // Informações da mensagem original para podermos editá-la depois
-            const messageId = callbackQuery.message.message_id;
-            const chatId = callbackQuery.message.chat.id;
-            const originalText = callbackQuery.message.text;
+            const callbackData = callbackQuery.data;
+            const message = callbackQuery.message;
+            const chatId = message.chat.id;
+            const messageId = message.message_id;
+            const originalText = message.text;
 
-            const parts = callbackData.split('_');
-            if (parts.length === 3 && parts[0] === 'update') {
+            // --- Lógica para ATUALIZAR STATUS (Concluída ou Falhou) ---
+            if (callbackData.startsWith('update_')) {
+                const parts = callbackData.split('_');
                 const entregaId = parts[1];
                 const novoStatus = parts[2] === 'concluida' ? 'Concluída' : 'Falhou';
 
-                console.log(`[WEBHOOK TELEGRAM] Atualizando entrega ${entregaId} para ${novoStatus}`);
-
-                // 1. Salva no Firebase (como antes)
-                const entregaRef = db.collection('entregas').doc(entregaId);
-                await entregaRef.update({ status: novoStatus, updatedAt: admin.firestore.FieldValue.serverTimestamp() });
+                await db.collection('entregas').doc(entregaId).update({ 
+                    status: novoStatus, 
+                    updatedAt: admin.firestore.FieldValue.serverTimestamp() 
+                });
                 
-                console.log(`[DB] Entrega ${entregaId} atualizada com sucesso para ${novoStatus}.`);
-
-                // 2. Edita a mensagem original no Telegram para dar feedback
-                const { TELEGRAM_BOT_TOKEN } = process.env;
-                const telegramEditUrl = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/editMessageText`;
-
                 const emoji = novoStatus === 'Concluída' ? '✅' : '❌';
                 const newText = `${originalText}\n\n*Status atualizado para: ${novoStatus} ${emoji}*`;
+                await editarMensagemTelegram(chatId, messageId, newText);
+            }
+            
+            // --- Lógica para CONCLUIR COM OBSERVAÇÃO ---
+            else if (callbackData.startsWith('obs_')) {
+                const entregaId = callbackData.split('_')[1];
 
-                await fetch(telegramEditUrl, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        chat_id: chatId,
-                        message_id: messageId,
-                        text: newText,
-                        parse_mode: 'Markdown'
-                        // Importante: Não enviamos 'reply_markup' para que os botões desapareçam!
-                    })
+                // 1. Marca a entrega como 'Concluída' e adiciona o sinalizador 'requerAtencao'
+                await db.collection('entregas').doc(entregaId).update({
+                    status: 'Concluída',
+                    requerAtencao: true,
+                    updatedAt: admin.firestore.FieldValue.serverTimestamp()
                 });
 
-                console.log(`[TELEGRAM] Mensagem ${messageId} editada com sucesso.`);
+                // 2. Edita a mensagem no Telegram para confirmar e pedir a observação
+                const newText = `${originalText}\n\n*✅ Entrega Concluída com Observação.*\nPor favor, descreva o ocorrido abaixo e envie.`;
+                await editarMensagemTelegram(chatId, messageId, newText);
             }
         }
+        // Não precisamos mais da lógica para receber texto, pois a conversa será informal
+        
         res.sendStatus(200);
     } catch (error) {
         console.error("Erro no webhook do Telegram:", error);
@@ -230,23 +289,38 @@ app.patch('/api/entregas/:id/status', async (req, res) => {
   }
 });
 
+// DEPOIS - server.js (CORRIGIDO)
 app.post('/api/entregadores', async (req, res) => {
-  const { nome, telefone, veiculo, rota, userId } = req.body;
+  
+  const { nome, telefone, veiculo, rota, userId, fotoUrl } = req.body; 
   if (!nome || !userId) return res.status(400).send('Dados incompletos.');
   try {
-    const docRef = await db.collection('entregadores').add({ nome, telefone, veiculo, rota, userId });
+    const docRef = await db.collection('entregadores').add({ 
+        nome, 
+        telefone, 
+        veiculo, 
+        rota, 
+        userId, 
+        fotoUrl: fotoUrl || null // 2. Adicione 'fotoUrl' ao objeto que será salvo no Firestore
+    });
     res.status(201).json({ id: docRef.id, ...req.body });
   } catch (error) {
     console.error('Erro ao criar entregador:', error);
     res.status(500).send('Erro interno');
   }
 });
-
 app.put('/api/entregadores/:id', async (req, res) => {
   const { id } = req.params;
-  const { nome, telefone, veiculo, rota } = req.body;
+  // 1. Adicione 'fotoUrl' para extraí-lo do corpo da requisição
+  const { nome, telefone, veiculo, rota, fotoUrl } = req.body;
   try {
-    await db.collection('entregadores').doc(id).update({ nome, telefone, veiculo, rota });
+    await db.collection('entregadores').doc(id).update({ 
+        nome, 
+        telefone, 
+        veiculo, 
+        rota, 
+        fotoUrl: fotoUrl || null // 2. Adicione 'fotoUrl' ao objeto que será atualizado
+    });
     res.status(200).json({ id, ...req.body });
   } catch (error) {
     console.error('Erro ao atualizar entregador:', error);
@@ -277,32 +351,97 @@ app.delete('/api/jornadas/:id', async (req, res) => {
 });
 
 app.get('/api/kpis/:userId', async (req, res) => {
-  const { userId } = req.params;
   try {
-    const hoje = new Date();
-    hoje.setHours(0, 0, 0, 0);
-    const ontem = new Date(hoje);
-    ontem.setDate(hoje.getDate() - 1);
-    const inicioOntem = admin.firestore.Timestamp.fromDate(ontem);
-    const fimOntem = admin.firestore.Timestamp.fromDate(hoje);
-    const jornadasRef = db.collection('jornadas');
-    const q = jornadasRef.where("userId", "==", userId).where("status", "==", "finalizada").where("dataFim", ">=", inicioOntem).where("dataFim", "<", fimOntem);
-    const snapshot = await q.get();
-    let entregasConcluidasOntem = 0;
-    if (!snapshot.empty) {
-      snapshot.docs.forEach(doc => {
-        const resumo = doc.data().resumo;
-        if (resumo && resumo.concluidas) {
-          entregasConcluidasOntem += resumo.concluidas;
-        }
+    const { userId } = req.params;
+
+    // ✅ Buscar total de entregadores (esse continua geral)
+    const entregadoresSnap = await db.collection('entregadores').where('userId', '==', userId).get();
+    const totalEntregadores = entregadoresSnap.size;
+
+    // ✅ Buscar a ÚLTIMA jornada finalizada
+    const jornadasSnap = await db.collection('jornadas')
+      .where('userId', '==', userId)
+      .where('status', '==', 'finalizada')
+      .orderBy('dataFim', 'desc')
+      .limit(1)
+      .get();
+
+    // Se não houver jornadas finalizadas, retornar valores vazios
+    if (jornadasSnap.empty) {
+      return res.json({
+        totalEntregadores,
+        valorRecebido: 0,
+        porcentagemEntregasConcluidas: 0,
+        tempoMedioEntrega: '—'
       });
     }
-    res.status(200).json({ entregasConcluidasOntem });
+
+    // Pegar ID da última jornada
+    const ultimaJornadaId = jornadasSnap.docs[0].id;
+
+    // ✅ Buscar APENAS entregas da última jornada
+    const entregasSnap = await db.collection('entregas')
+      .where('jornadaId', '==', ultimaJornadaId)
+      .get();
+
+    let valorRecebido = 0;
+    let entregasConcluidasCount = 0;
+    let totalEntregas = entregasSnap.size;
+    let tempos = [];
+
+    entregasSnap.forEach(doc => {
+      const data = doc.data();
+      
+      if (data.status === 'Concluída') {
+        entregasConcluidasCount++;
+        valorRecebido += parseFloat(data.valorCobrar || 0);
+        
+        // Calcular tempo de entrega
+        if (data.createdAt && data.updatedAt &&
+            typeof data.createdAt.toDate === 'function' &&
+            typeof data.updatedAt.toDate === 'function') {
+          const tempoEmMinutos = (data.updatedAt.toDate().getTime() - data.createdAt.toDate().getTime()) / 60000;
+          tempos.push(tempoEmMinutos);
+        }
+      }
+    });
+
+    // Calcular porcentagem de conclusão
+    const porcentagemEntregasConcluidas = totalEntregas > 0 
+      ? Math.round((entregasConcluidasCount / totalEntregas) * 100) 
+      : 0;
+
+    // Calcular tempo médio
+    let tempoMedioEntrega = '—';
+    if (tempos.length > 0) {
+      const mediaMins = Math.round(tempos.reduce((a, b) => a + b, 0) / tempos.length);
+      
+      if (mediaMins < 60) {
+        tempoMedioEntrega = `${mediaMins} min`;
+      } else {
+        const horas = Math.floor(mediaMins / 60);
+        const minutos = mediaMins % 60;
+        tempoMedioEntrega = `${horas}h ${minutos}min`;
+      }
+    }
+
+    res.json({
+      totalEntregadores,
+      valorRecebido,
+      porcentagemEntregasConcluidas,
+      tempoMedioEntrega
+    });
+
   } catch (error) {
-    console.error("Erro ao buscar KPIs:", error);
-    res.status(500).send("Erro interno do servidor.");
+    console.error('Erro no get /api/kpis/:userId:', error);
+    res.status(500).json({ error: 'Erro interno do servidor' });
   }
 });
+
+
+
+
+
 
 app.post('/api/jornadas/:id/finalizar', async (req, res) => {
   const { id } = req.params;
