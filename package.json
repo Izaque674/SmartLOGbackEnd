@@ -4,8 +4,9 @@
   "description": "",
   "main": "data.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
+    "test": "jest",
     "start": "node server.js"
+
   },
   "keywords": [],
   "author": "",
@@ -18,5 +19,11 @@
     "firebase-admin": "^13.5.0",
     "node-fetch": "^2.7.0",
     "twilio": "^5.7.3"
+  },
+  "devDependencies": {
+    "jest": "^30.2.0",
+    "supertest": "^7.1.4"
   }
+
 }
+
