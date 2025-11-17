@@ -55,7 +55,7 @@ app.post('/api/entregas', async (req, res) => {
     if (TELEGRAM_BOT_TOKEN && TELEGRAM_CHAT_ID) {
         const telegramUrl = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`;
     
-        let text = `*Nova ${novaEntrega.tipo} para ${cliente}!*\n\n*Pedido:* ${pedido}\n*Endereço:* ${endereco}`;
+        let text = `*Nova ${novaEntrega.tipo} para ${cliente}!*\n\n*Endereço:* ${endereco} \n*observação:* ${pedido}`;
         if (novaEntrega.valorCobrar > 0) {
             text += `\n\n*Atenção:* Cobrar R$ ${novaEntrega.valorCobrar.toFixed(2).replace('.', ',')}`;
         }
@@ -75,13 +75,13 @@ app.post('/api/entregas', async (req, res) => {
                                 { text: "❌ Falhou", callback_data: `update_${docRef.id}_falhou` }
                             ],
                             [ // Linha 2 de botões
-                                { text: "📝 Adicionar Observação", callback_data: `obs_${docRef.id}` }
+                                { text: "📝 Adicionar Observação/ foto 📸 ", callback_data: `obs_${docRef.id}` }
                             ]
                         ]
                     }
                 })
             });
-            // ... resto do tratamento da resposta
+
         } catch (error) { /* ... */ }
     }
     
