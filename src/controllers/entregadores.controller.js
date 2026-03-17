@@ -55,7 +55,6 @@ const deletarEntregador = async(req,res) => {
     catch (error) {
         console.error('Erro ao deletar entregador',error);
         res.status(500).json({erro:'erro interno'});
-
     }
 
 }

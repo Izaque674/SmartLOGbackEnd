@@ -1,14 +1,16 @@
 const { db, admin } = require('../config/firebase');
 
-const deletarJornada = async (id) => {
-    await db.collection('jornadas').doc(id).delete();
+const deletarJornada = async (userId) => {
+    await db.collection('jornadas').doc(userId).delete();
 }
 
-const historicoJornada = async(id) => {
+const historicoJornada = async(userId) => {
+    
     const snapshot = await db.collection('jornadas')
-    .where ("userId", "==", id)
+    .where ("userId", "==",userId)
     .where("status", "==", "finalizada")
     .get();
+    
 
     if(snapshot.empty) return [];
 
