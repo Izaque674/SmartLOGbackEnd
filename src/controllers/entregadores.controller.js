@@ -20,8 +20,6 @@ const criarEntregador = async (req , res) => {
 
 }
 
-
-
 const alterarEntregador = async(req,res) => {
     const {id} = req.params;
     const {nome, telefone, veiculo, rota, userId, fotoUrl} = req.body;
