@@ -4,7 +4,10 @@ const { db } = require('../config/firebase');
 
 const criarEntregador = async (dados) => {
 
-  return await db.collection ('entregadores').add(dados);
+     return await db.collection('entregadores').add({
+        ...dados,
+        fotoUrl: dados.fotoUrl || null
+    });
 
 }
 
