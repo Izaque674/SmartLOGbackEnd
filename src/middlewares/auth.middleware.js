@@ -1,4 +1,4 @@
-
+const { admin } = require('../config/firebase');
 
 const authMiddleware = async (req, res, next) => {
     const token = req.headers.authorization?.split('Bearer ')[1];
@@ -17,3 +17,5 @@ try{
     return res.status(401).json({erro: 'token invalido'})
 }
  }
+
+ module.exports = {authMiddleware};
